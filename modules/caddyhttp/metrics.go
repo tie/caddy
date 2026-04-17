@@ -51,7 +51,7 @@ type Metrics struct {
 	// CARDINALITY PROTECTION: To prevent unbounded cardinality attacks,
 	// only explicitly configured hosts (via host matchers) are allowed
 	// by default. Other hosts are aggregated under the "_other" label.
-	// See AllowCatchAllHosts to change this behavior.
+	// See ObserveCatchallHosts to change this behavior.
 	PerHost bool `json:"per_host,omitempty"`
 
 	// Allow metrics for catch-all hosts (hosts without explicit configuration).
@@ -59,13 +59,13 @@ type Metrics struct {
 	// will get individual metrics labels. All other hosts will be aggregated
 	// under the "_other" label to prevent cardinality explosion.
 	//
-	// This is automatically enabled for HTTPS servers (since certificates provide
+	// By default, this is enabled for HTTPS servers (since certificates provide
 	// some protection against unbounded cardinality), but disabled for HTTP servers
-	// by default to prevent cardinality attacks from arbitrary Host headers.
+	// to prevent cardinality attacks from arbitrary Host headers.
 	//
 	// Set to true to allow all hosts to get individual metrics (NOT RECOMMENDED
 	// for production environments exposed to the internet).
-	ObserveCatchallHosts bool `json:"observe_catchall_hosts,omitempty"`
+	ObserveCatchallHosts *bool `json:"observe_catchall_hosts,omitempty"`
 
 	init           sync.Once
 	httpMetrics    *httpMetrics
@@ -185,7 +185,7 @@ func (m *Metrics) scanConfigForHosts(app *App) {
 // shouldAllowHostMetrics determines if metrics should be collected for the given host.
 // This implements the cardinality protection by only allowing metrics for:
 // 1. Explicitly configured hosts
-// 2. Catch-all requests on HTTPS servers (if AllowCatchAllHosts is true or auto-enabled)
+// 2. Catch-all requests on HTTPS servers (if ObserveCatchallHosts is true or auto-enabled)
 // 3. Catch-all requests on HTTP servers only if explicitly allowed
 func (m *Metrics) shouldAllowHostMetrics(host string, isHTTPS bool) bool {
 	if !m.PerHost {
@@ -200,7 +200,10 @@ func (m *Metrics) shouldAllowHostMetrics(host string, isHTTPS bool) bool {
 	}
 
 	// For catch-all requests (not in allowed hosts)
-	allowCatchAll := m.ObserveCatchallHosts || (isHTTPS && m.hasHTTPSServer)
+	allowCatchAll := isHTTPS && m.hasHTTPSServer
+	if m.ObserveCatchallHosts != nil {
+		allowCatchAll = *m.ObserveCatchallHosts
+	}
 	return allowCatchAll
 }
 

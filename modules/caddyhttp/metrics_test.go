@@ -202,9 +202,10 @@ func TestMetricsInstrumentedHandler(t *testing.T) {
 
 func TestMetricsInstrumentedHandlerPerHost(t *testing.T) {
 	ctx, _ := caddy.NewContext(caddy.Context{Context: context.Background()})
+	observeCatchallHosts := true // Allow all hosts for testing
 	metrics := &Metrics{
 		PerHost:              true,
-		ObserveCatchallHosts: true, // Allow all hosts for testing
+		ObserveCatchallHosts: &observeCatchallHosts,
 		init:                 sync.Once{},
 		httpMetrics:          &httpMetrics{},
 		allowedHosts:         make(map[string]struct{}),
@@ -377,10 +378,10 @@ func TestMetricsInstrumentedHandlerPerHost(t *testing.T) {
 func TestMetricsCardinalityProtection(t *testing.T) {
 	ctx, _ := caddy.NewContext(caddy.Context{Context: context.Background()})
 
-	// Test 1: Without AllowCatchAllHosts, arbitrary hosts should be mapped to "_other"
+	// Test 1: Without ObserveCatchallHosts, arbitrary hosts should be mapped to "_other"
 	metrics := &Metrics{
 		PerHost:              true,
-		ObserveCatchallHosts: false, // Default - should map unknown hosts to "_other"
+		ObserveCatchallHosts: nil, // Default - should map unknown hosts to "_other"
 		init:                 sync.Once{},
 		httpMetrics:          &httpMetrics{},
 		allowedHosts:         make(map[string]struct{}),
@@ -431,13 +432,13 @@ func TestMetricsCardinalityProtection(t *testing.T) {
 	}
 }
 
-func TestMetricsHTTPSCatchAll(t *testing.T) {
+func TestMetricsHTTPSDefaultCatchAll(t *testing.T) {
 	ctx, _ := caddy.NewContext(caddy.Context{Context: context.Background()})
 
-	// Test that HTTPS requests allow catch-all even when AllowCatchAllHosts is false
+	// Test 2: Without ObserveCatchallHosts, HTTPS requests allow catch-all
 	metrics := &Metrics{
 		PerHost:              true,
-		ObserveCatchallHosts: false,
+		ObserveCatchallHosts: nil,
 		hasHTTPSServer:       true, // Simulate having HTTPS servers
 		init:                 sync.Once{},
 		httpMetrics:          &httpMetrics{},
@@ -476,7 +477,56 @@ func TestMetricsHTTPSCatchAll(t *testing.T) {
 	if err := testutil.GatherAndCompare(ctx.GetMetricsRegistry(), strings.NewReader(expected),
 		"caddy_http_requests_total",
 	); err != nil {
-		t.Errorf("HTTPS catch-all test failed: %s", err)
+		t.Errorf("HTTPS default catch-all test failed: %s", err)
+	}
+}
+
+func TestMetricsHTTPSDisableCatchAll(t *testing.T) {
+	ctx, _ := caddy.NewContext(caddy.Context{Context: context.Background()})
+
+	// Test 3: With ObserveCatchallHosts disabled explicitly, HTTPS requests DO NOT allow catch-all
+	observeCatchallHosts := false
+	metrics := &Metrics{
+		PerHost:              true,
+		ObserveCatchallHosts: &observeCatchallHosts,
+		hasHTTPSServer:       true, // Simulate having HTTPS servers
+		init:                 sync.Once{},
+		httpMetrics:          &httpMetrics{},
+		allowedHosts:         make(map[string]struct{}), // Empty - no explicitly allowed hosts
+	}
+
+	h := HandlerFunc(func(w http.ResponseWriter, r *http.Request) error {
+		w.Write([]byte("hello"))
+		return nil
+	})
+
+	ih := newMetricsInstrumentedRoute(ctx, "test", h, metrics)
+
+	// Test HTTPS request (should be mapped to "_other")
+	r1 := httptest.NewRequest("GET", "https://unknown.com/", nil)
+	r1.Host = "unknown.com"
+	r1.TLS = &tls.ConnectionState{} // Mark as TLS/HTTPS
+	w1 := httptest.NewRecorder()
+	ih.ServeHTTP(w1, r1)
+
+	// Test HTTP request (should also be mapped to "_other")
+	r2 := httptest.NewRequest("GET", "http://unknown.com/", nil)
+	r2.Host = "unknown.com"
+	// No TLS field = HTTP request
+	w2 := httptest.NewRecorder()
+	ih.ServeHTTP(w2, r2)
+
+	// Check that both requests got mapped to "_other"
+	expected := `
+	# HELP caddy_http_requests_total Counter of HTTP(S) requests made.
+	# TYPE caddy_http_requests_total counter
+	caddy_http_requests_total{handler="test",host="_other",server="UNKNOWN"} 2
+	`
+
+	if err := testutil.GatherAndCompare(ctx.GetMetricsRegistry(), strings.NewReader(expected),
+		"caddy_http_requests_total",
+	); err != nil {
+		t.Errorf("HTTPS disable catch-all test failed: %s", err)
 	}
 }
 

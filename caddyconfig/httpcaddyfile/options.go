@@ -483,7 +483,8 @@ func unmarshalCaddyfileMetricsOptions(d *caddyfile.Dispenser) (any, error) {
 		case "per_host":
 			metrics.PerHost = true
 		case "observe_catchall_hosts":
-			metrics.ObserveCatchallHosts = true
+			boolVal := true
+			metrics.ObserveCatchallHosts = &boolVal
 		default:
 			return nil, d.Errf("unrecognized servers option '%s'", d.Val())
 		}
